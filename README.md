@@ -122,8 +122,8 @@ git clone <your-repository-URL> PICCIS
 cd PICCIS
 bash install.sh                 # conda environments + R packages + clones tANI_tool
 conda activate plasmidos_env
-bash install_databases.sh       # downloads all databases (including geNomad)
-bash check_piccis.sh            # verifies the installation
+bash install_databases.sh       # downloads all databases
+bash check_piccis.sh            # verifies the installation (optional)
 ```
 
 Each step is described in detail below.
