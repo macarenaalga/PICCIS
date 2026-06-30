@@ -1,12 +1,12 @@
-<!-- Language: **English** | [Español](README.es.md) -->
 
-# PICCIS v2.0
+# PICCIS
 
 **P**lasmid **I**dentification, **C**lustering and **C**omparative **I**ntegrated **S**core
 
 PICCIS is a reproducible pipeline for the **identification, deduplication, annotation, and comparative analysis of plasmids** from raw sequencing reads (FASTQ) and/or assembled genomes (GenBank/FASTA). It integrates several complementary plasmid-detection tools under a consensus scheme, computes a per-plasmid **PICCIS Score** of detection reliability, and produces a unified results table together with a set of publication-ready figures and phylogenetic trees.
-
-> **Language:** English · [Versión en español](README.es.md)
+<h1>
+  <img src="logo_PICCIS.png" width="200" style="vertical-align: middle;"/>
+</h1>
 
 ---
 
