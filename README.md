@@ -215,8 +215,7 @@ PICCIS relies on isolated environments because the dependencies of several tools
 | Bakta (light) + AMRFinderPlus | ~1.3 GB | `BAKTA_DB` | Yes |
 | Platon | ~1.8 GB | `PLATON_DB` | Yes |
 | geNomad | ~1.6 GB | `GENOMAD_DB` | Yes |
-| Abricate (resfinder/card/vfdb) | < 1 GB | — (self-managed) | Yes |
-| PlasmidFinder | small | — (auto-downloaded) | Yes |
+| Abricate (resfinder/card/vfdb/PlasmidFinder) | < 1 GB | — (self-managed) | Yes |
 | EggNOG-mapper | ~6–14 GB | `EGGNOG_DB` | Optional* |
 
 \* If `EGGNOG_DB` is not configured, EggNOG operates in **remote mode**, which requires an internet connection and is slower.
@@ -283,7 +282,7 @@ Internally, every reconstructed plasmid is renamed using a double-underscore con
 <sample>__<tool>__<original_name>.fasta
 ```
 
-For example, `HST74__spades__component_3.fasta` or `HST74__mob_recon__AB123.fasta`. The double underscore (`__`) separates the source-sample name from the method, which allows the deduplication step to group predictions correctly regardless of their origin. Sample names are normalized so that dots become hyphens (for example, `NZ_CP090643.1` becomes `NZ_CP090643-1`) and spaces become underscores, while hyphens are preserved as meaningful separators.
+For example, `sample__spades__component_3.fasta` or `sample__mob_recon__AB123.fasta`. The double underscore (`__`) separates the source-sample name from the method, which allows the deduplication step to group predictions correctly regardless of their origin. Sample names are normalized so that dots become hyphens (for example, `sample.1` becomes `sample-1`) and spaces become underscores, while hyphens are preserved as meaningful separators.
 
 ### Examples
 
@@ -314,7 +313,7 @@ The metadata file is optional but recommended: it enriches the unified table and
 
 | Column | Example | Use |
 |---|---|---|
-| `sample` | `HST74` | Must match the input strain name (without extension) |
+| `sample` | `NAMESAMPLE` | Must match the input strain name (without extension) |
 | `Niche` | `Environment` / `Clinic` / `Undetermined` | Coloring and per-niche figures |
 | `Especie` | `Klebsiella pneumoniae` | Per-species figures |
 | `Pais` | `Argentina` | Geographic map (world map) |
