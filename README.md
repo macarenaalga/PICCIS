@@ -429,18 +429,18 @@ The PICCIS Score figure comprises two panels: a detection heatmap, in which each
 
 | Tool | Function | Reference |
 |---|---|---|
-| plasmidSPAdes / SPAdes | Plasmid assembly | Antipov et al. |
-| Unicycler | Hybrid assembly | Wick et al. |
-| MOB-suite (MOB-recon / MOB-typer) | Mobility reconstruction and typing | Robertson & Nash |
-| Platon | Per-contig plasmid detection | Schwengers et al. |
-| geNomad | Machine-learning plasmid/virus classification | Camargo et al. |
-| PlasmidFinder | Replicon typing | Carattoli et al. |
-| Abricate | Resistance/virulence gene screening | Seemann |
-| Bakta | Genome/plasmid annotation | Schwengers et al. |
-| Panaroo | Pangenome analysis | Tonkin-Hill et al. |
-| EggNOG-mapper | Functional annotation (COG/GO) | Cantalapiedra et al. |
-| tANI_tool | Total ANI distance and phylogeny | Gosselin et al. |
-| BLAST+ | Sequence comparison | Camacho et al. |
+| plasmidSPAdes / SPAdes | Plasmid assembly | Antipov et al. 2016 |
+| Unicycler | Hybrid assembly | Wick et al. 2017|
+| MOB-suite (MOB-recon / MOB-typer) | Mobility reconstruction and typing | Robertson & Nash 2018 |
+| Platon | Per-contig plasmid detection | Schwengers et al. 2020|
+| geNomad | Machine-learning plasmid/virus classification | Camargo et al. 2024|
+| PlasmidFinder | Replicon typing | Carattoli et al. 2020|
+| Abricate | Resistance/virulence gene screening | Seemann T, Abricate, Github https://github.com/tseemann/abricate |
+| Bakta | Genome/plasmid annotation | Schwengers et al. 2021|
+| Panaroo | Pangenome analysis | Tonkin-Hill et al. 2020|
+| EggNOG-mapper | Functional annotation (COG/GO) | Cantalapiedra et al. 2021|
+| tANI_tool | Total ANI distance and phylogeny | Gosselin et al. 2022|
+| BLAST+ | Sequence comparison | Camacho et al. 2009|
 
 > If PICCIS is used in a publication, **each third-party tool** executed on the data should also be cited.
 
@@ -467,7 +467,7 @@ The PICCIS Score figure comprises two panels: a detection heatmap, in which each
 If PICCIS is used in your work, please cite this repository and the third-party tools listed in [Integrated Tools](#integrated-tools).
 
 ```
-PICCIS v2.0 — Plasmid Identification, Clustering and Comparative Integrated Score.
+PICCIS — Plasmid Identification, Clustering and Comparative Integrated Score.
 <author(s)>, <year>. <repository URL>
 ```
 
