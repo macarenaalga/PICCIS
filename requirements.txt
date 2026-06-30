@@ -1,0 +1,21 @@
+# PICCIS v2.0 - Dependencias pip de plasmidos_env
+# Instaladas por install.sh:  pip install -r requirements.txt
+
+# ── Bioinformática ──────────────────────────────────────────
+biopython>=1.80
+
+# ── Datos / cálculo ─────────────────────────────────────────
+pandas>=1.5
+numpy>=1.23
+scipy>=1.9
+scikit-learn>=1.1
+openpyxl>=3.0
+
+# ── Visualización ───────────────────────────────────────────
+matplotlib>=3.6
+seaborn>=0.12
+
+# ── Mapa geográfico (opcional: gráfico planisferio) ─────────
+geopandas>=0.12
+geopy>=2.3
+distinctipy>=1.2

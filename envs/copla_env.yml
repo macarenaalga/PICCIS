@@ -1,0 +1,16 @@
+name: copla_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.8
+  - blast=2.9
+  - prodigal
+  - hmmer
+  - ruby
+  - perl
+  - parallel
+  - graph-tool
+  - pandas
+  - plasmidfinder

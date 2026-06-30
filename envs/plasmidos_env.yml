@@ -1,0 +1,27 @@
+name: plasmidos_env
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - blast=2.12
+  - spades
+  - platon
+  - plasmidfinder
+  - panaroo
+  - eggnog-mapper
+  - perl
+  - pip:
+    - biopython>=1.80
+    - pandas>=1.5
+    - numpy>=1.23
+    - matplotlib>=3.6
+    - seaborn>=0.12
+    - scipy>=1.9
+    - scikit-learn>=1.1
+    - openpyxl>=3.0
+    - geopandas>=0.12
+    - geopy>=2.3
+    - distinctipy>=1.2

@@ -1,0 +1,74 @@
+# ================================================================
+#  PICCIS v2.0 - .gitignore
+# ================================================================
+
+# ── Configuración generada automáticamente ──────────────────
+# piccis.conf contiene rutas absolutas propias de cada máquina;
+# lo genera install_databases.sh, no debe versionarse.
+piccis.conf
+
+# ── Repositorio externo clonado en la instalación ───────────
+# tANI_tool se clona con install.sh; no se redistribuye aquí.
+tANI_tool/
+
+# ── Bases de datos (pesadas, se descargan con install_databases.sh)
+databases/
+*.dmnd
+*.tar.gz
+*.tar.xz
+
+# ── Salidas del pipeline ────────────────────────────────────
+# Carpetas y archivos que el pipeline crea en el directorio de trabajo.
+todos_plasmidos/
+fastas-unicos/
+plasmidos_analizados/
+FASTQ-plasmid/
+FASTQ-unicycler/
+MOB-recon-plasmid/
+MOB-recon-gbk/
+GBK-FASTA-plasmid/
+unicycler-replicons/
+genomad_out/
+panaroo_out/
+tablas_resumen/
+graficos/
+resultados-blast-resumido.tsv
+piccis_score.tsv
+tabla_unificada.tsv
+componentes_y_clusters.csv
+
+# ── Resultados de corridas (si usás --workdir con estos nombres) ──
+run*/
+resultados*/
+*_results/
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+
+# ── Entornos virtuales (los conda envs viven fuera del repo) ─
+.venv/
+venv/
+env/
+
+# ── Logs y temporales ───────────────────────────────────────
+*.log
+*.tmp
+tmp/
+setup.log
+original_calculations.log
+blast_database.log
+
+# ── Sistema operativo / editores ────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
