@@ -75,11 +75,11 @@ flowchart TD
     E --> E1[MOB-recon]
     E --> E2[Platon]
     E --> E3[geNomad]
-    E --> E4[PlasmidFinder / Abricate replicons]
+    E --> E4[PlasmidFinder]
     E1 & E2 & E3 & E4 --> F[todos_plasmidos/]
     F --> G[Intra-sample BLAST all-vs-all → fastas-unicos/]
     G --> H[PICCIS Score]
-    G --> I[MOB-typer · Abricate]
+    G --> I[MOB-typer & Abricate]
     H --> J[tabla_unificada.tsv]
     I --> J
     G --> K[Bakta → Panaroo → EggNOG]
