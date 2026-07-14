@@ -467,7 +467,8 @@ If PICCIS is used in your work, please cite this repository and the third-party 
 
 ```
 PICCIS — Plasmid Identification, Clustering and Comparative Integrated Score.
-<author(s)>, <year>. <repository URL>
+DOI: 10.5281/zenodo.21358968
+Algañarás Macarena, Bosch Alejandra, Lozano J. Mauricio.
 ```
 
 ---
