@@ -1,7 +1,8 @@
 
 # PICCIS
 
-**P**lasmid **I**dentification, **C**lustering and **C**omparative **I**ntegrated **S**core
+**P**lasmid **I**dentification, **C**haracterization and **C**lusterization **I**ntegrated **S**core
+
 
 PICCIS is a reproducible pipeline for the **identification, deduplication, annotation, and comparative analysis of plasmids** from raw sequencing reads (FASTQ) and/or assembled genomes (GenBank/FASTA). It integrates several complementary plasmid-detection tools under a consensus scheme, computes a per-plasmid **PICCIS Score** of detection reliability, and produces a unified results table together with a set of publication-ready figures and phylogenetic trees.
 <h1>
@@ -466,7 +467,7 @@ The PICCIS Score figure comprises two panels: a detection heatmap, in which each
 If PICCIS is used in your work, please cite this repository and the third-party tools listed in [Integrated Tools](#integrated-tools).
 
 ```
-PICCIS — Plasmid Identification, Clustering and Comparative Integrated Score.
+PICCIS — Plasmid Identification Characterization Clusterization Interpretation Scoring.
 DOI: 10.5281/zenodo.21358968
 Algañarás Macarena, Bosch Alejandra, Lozano J. Mauricio.
 ```
