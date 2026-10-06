@@ -119,7 +119,7 @@ Installation consists of three ordered steps: creating the conda environments, d
 ### Quick Install
 
 ```bash
-git clone <your-repository-URL> PICCIS
+git clone https://github.com/macarenaalga/PICCIS.git
 cd PICCIS
 bash install.sh                 # conda environments + R packages + clones tANI_tool
 conda activate plasmidos_env
