@@ -132,7 +132,7 @@ Each step is described in detail below.
 ### 1. Clone the Repository
 
 ```bash
-git clone <your-repository-URL> PICCIS
+git clone https://github.com/macarenaalga/PICCIS.git
 cd PICCIS
 ```
 
