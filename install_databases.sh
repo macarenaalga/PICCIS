@@ -16,7 +16,7 @@ CONF_FILE="$(cd "$(dirname "$0")" && pwd)/piccis.conf"
 
 echo ""
 echo "========================================================"
-echo "  PICCIS v2.0 - Database setup"
+echo "  PICCIS v1.0 - Database setup"
 echo "  All databases will be saved to: $DB_DIR"
 echo "========================================================"
 
