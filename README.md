@@ -224,7 +224,7 @@ PICCIS relies on isolated environments because the dependencies of several tools
 The `piccis.conf` file is generated automatically and has the following form:
 
 ```ini
-# PICCIS v2.0 - Database configuration
+# PICCIS v1.0 - Database configuration
 BAKTA_DB=/home/user/databases/piccis/bakta_db/db-light
 PLATON_DB=/home/user/databases/piccis/platon_db
 GENOMAD_DB=/home/user/databases/piccis/genomad_db/genomad_db
