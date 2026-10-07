@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================
-#  PICCIS v2.0 - Database setup
+#  PICCIS - Database setup
 #  Run once after install.sh:
 #    conda activate plasmidos_env
 #    bash install_databases.sh
