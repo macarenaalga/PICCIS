@@ -10,6 +10,12 @@ dependencies:
   - r-gdtools
   - r-systemfonts
   - r-aplot
+  - r-openmx          
+  - r-ape
+  - r-phangorn
+  - r-stringr
+  - r-matrix
+  - r-codetools      
   - freetype
   - libuv
   - zlib
