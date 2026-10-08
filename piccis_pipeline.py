@@ -1558,20 +1558,6 @@ def _load_mob_typer(home: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def _load_plasmidfinder(home: Path) -> pd.DataFrame:
-    tsv = home / "plasmidfinder_out" / "results_tab.tsv"
-    if not tsv.exists():
-        return pd.DataFrame()
-    try:
-        df = pd.read_csv(tsv, sep="\t")
-        if df.empty:
-            return pd.DataFrame()
-        if "Query ID" in df.columns:
-            df = df.rename(columns={"Query ID": "ID"})
-        return df
-    except (pd.errors.EmptyDataError, Exception):
-        return pd.DataFrame()
-
 
 def _load_abricate(home: Path) -> pd.DataFrame:
 
@@ -1818,7 +1804,6 @@ def build_unified_table(home: Path, fu: Path, add_meta: bool = False,
     # Fusionar resultados de cada herramienta normalizando IDs
     for loader, tag in [
         (_load_mob_typer,     "mob"),
-        (_load_plasmidfinder, "pf"),
         (_load_genomad,       "genomad"),
         (_load_platon,        "platon"),
         (_load_abricate,      "abr"),
@@ -3488,9 +3473,9 @@ Core selection priority:
 
     # ─── 8. Downstream pesado ─────────────────────────────────────────
     print("\n── Downstream analysis ───────────────────────────────────")
-    print("   PlasmidFinder · PlasFlow · MOB-typer · Abricate")
+    print("   PlasmidFinder · MOB-typer · Abricate")
     print("   Bakta · Panaroo · EggNOG-mapper · tANI")
-    check_exe("plasmidfinder.py", "perl", "git")
+    check_exe("perl", "git")
     check_env("eggnog_env",   "emapper.py")
     check_env("mob_env",      "mob_recon")
     check_env("panaroo_env",  "panaroo")
