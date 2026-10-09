@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================
-#  PICCIS - Database setup
+#  PICCIS v1.0 - Database setup
 #  Run once after install.sh:
 #    conda activate plasmidos_env
 #    bash install_databases.sh
@@ -16,7 +16,7 @@ CONF_FILE="$(cd "$(dirname "$0")" && pwd)/piccis.conf"
 
 echo ""
 echo "========================================================"
-echo "  PICCIS v1.0 - Database setup"
+echo "  PICCIS v2.0 - Database setup"
 echo "  All databases will be saved to: $DB_DIR"
 echo "========================================================"
 
@@ -28,9 +28,33 @@ already_exists() {
     [[ -e "$1" ]] && [[ "$(ls -A "$1" 2>/dev/null)" ]]
 }
 
+bakta_db_ok() {
+    # Returns 0 (true) only if the Bakta DB looks complete.
+    # A non-empty folder is not enough: an interrupted download or
+    # extraction leaves a partial folder that would be skipped forever.
+    local d="$1" f stem tipo s
+    [[ -s "$d/version.json" ]] || return 1
+    # Índices HMMER obligatorios (los 4 archivos de cada uno)
+    for base in antifam pfam; do
+        for ext in h3f h3i h3m h3p; do
+            [[ -s "$d/$base.$ext" ]] || return 1
+        done
+    done
+    # Cualquier otro índice HMMER (.h3?) o Infernal (.i1?) presente
+    # también debe tener sus 4 archivos
+    for f in "$d"/*.h3? "$d"/*.i1?; do
+        [[ -e "$f" ]] || continue
+        stem="${f%.*}"; tipo="${f##*.}"; tipo="${tipo:0:2}"
+        for s in f i m p; do
+            [[ -s "$stem.$tipo$s" ]] || return 1
+        done
+    done
+    return 0
+}
+
 # ── 1. Abricate ──────────────────────────────────────────────
 echo ""
-echo "[1/6] Abricate databases (resfinder, card, vfdb)..."
+echo "[1/5] Abricate databases (resfinder, card, vfdb, plasmidfinder)..."
 if conda run -n abricate_env abricate --list 2>/dev/null | grep -q "resfinder"; then
     echo "      Already set up, skipping."
 else
@@ -40,41 +64,60 @@ fi
 
 # ── 2. Bakta ─────────────────────────────────────────────────
 echo ""
-echo "[2/6] Bakta database (~1.3 GB, light version)..."
+echo "[2/5] Bakta database (~1.3 GB, light version)..."
 BAKTA_DB="$DB_DIR/bakta_db"
 BAKTA_DB_LIGHT="$BAKTA_DB/db-light"
-if already_exists "$BAKTA_DB_LIGHT"; then
-    echo "      Already exists at $BAKTA_DB_LIGHT, skipping."
+if bakta_db_ok "$BAKTA_DB_LIGHT"; then
+    echo "      Already exists and is complete at $BAKTA_DB_LIGHT, skipping."
 else
+    if [[ -e "$BAKTA_DB_LIGHT" ]]; then
+        echo "      ⚠  Incomplete Bakta DB found at $BAKTA_DB_LIGHT"
+        echo "         (interrupted download/extraction). Removing and downloading again..."
+        rm -rf "$BAKTA_DB_LIGHT"
+    fi
+    rm -f "$BAKTA_DB/db-light.tar.xz"          # tarball parcial de un intento anterior
     mkdir -p "$BAKTA_DB"
     echo "      Downloading via bakta_db (compatible version auto-detected)..."
+    # Sin '|| true' set -e cortaría el script antes del rescate manual de abajo
     conda run -n bakta_env bakta_db download \
         --output "$BAKTA_DB" \
-        --type light
+        --type light || echo "      ⚠  bakta_db download returned an error, checking files..."
     # bakta_db download deja el tarball sin extraer si falla la extracción interna
-    if [[ -f "$BAKTA_DB/db-light.tar.xz" ]] && [[ ! -d "$BAKTA_DB_LIGHT" ]]; then
+    if [[ -f "$BAKTA_DB/db-light.tar.xz" ]] && ! bakta_db_ok "$BAKTA_DB_LIGHT"; then
         echo "      Extrayendo manualmente..."
+        rm -rf "$BAKTA_DB_LIGHT"
         tar -xJf "$BAKTA_DB/db-light.tar.xz" -C "$BAKTA_DB/"
         rm "$BAKTA_DB/db-light.tar.xz"
+    fi
+    if ! bakta_db_ok "$BAKTA_DB_LIGHT"; then
+        echo "      ✖  The Bakta DB is still incomplete at $BAKTA_DB_LIGHT."
+        echo "         Check disk space and internet connection, then run this script again."
+        exit 1
     fi
     echo "      Done. Path: $BAKTA_DB_LIGHT"
 fi
 
-# Inicializar AMRFinderPlus (requerido por Bakta, solo una vez)
+# Inicializar AMRFinderPlus (requerido por Bakta, solo una vez).
+# 'latest' es el enlace que AMRFinder usa para encontrar la versión
+# actual; si falta, la base no sirve aunque la carpeta tenga archivos.
 echo ""
 echo "      Initializing AMRFinderPlus database (required by Bakta)..."
-if already_exists "$BAKTA_DB_LIGHT/amrfinderplus-db"; then
+if [[ -e "$BAKTA_DB_LIGHT/amrfinderplus-db/latest" ]]; then
     echo "      AMRFinderPlus DB already initialized, skipping."
 else
     conda run -n bakta_env amrfinder_update \
         --force_update \
         --database "$BAKTA_DB_LIGHT/amrfinderplus-db"
+    if [[ ! -e "$BAKTA_DB_LIGHT/amrfinderplus-db/latest" ]]; then
+        echo "      ✖  AMRFinderPlus DB could not be initialized."
+        exit 1
+    fi
     echo "      AMRFinderPlus DB initialized."
 fi
 
 # ── 3. Platon ────────────────────────────────────────────────
 echo ""
-echo "[3/6] Platon database (~1.8 GB)..."
+echo "[3/5] Platon database (~1.8 GB)..."
 PLATON_DB="$DB_DIR/platon_db"
 
 if already_exists "$PLATON_DB"; then
@@ -110,7 +153,7 @@ fi
 # Reemplaza a PlasFlow en la v2.0. 'genomad download-database <dir>'
 # crea <dir>/genomad_db con todos los archivos del modelo.
 echo ""
-echo "[4/6] geNomad database (~1.6 GB)..."
+echo "[4/5] geNomad database (~1.6 GB)..."
 GENOMAD_DB_PARENT="$DB_DIR/genomad_db"
 GENOMAD_DB="$GENOMAD_DB_PARENT/genomad_db"
 if already_exists "$GENOMAD_DB"; then
@@ -121,45 +164,96 @@ else
     echo "      Done. Path: $GENOMAD_DB"
 fi
 
-# ── 5. PlasmidFinder ─────────────────────────────────────────
+# ── 5. EggNOG-mapper (optional) ──────────────────────────────
+# EggNOG-mapper no tiene modo en línea: siempre necesita la base local
+# completa (eggnog.db para anotar, eggnog.taxa.db para la taxonomía y
+# eggnog_proteins.dmnd para la búsqueda con diamond).
+# download_eggnog_data.py NO se usa: en versiones anteriores a la 2.1.13
+# apunta a eggnogdb.embl.de, dominio que ya no existe. Los archivos se
+# bajan directo de eggnog5.embl.de, en la versión que pide el programa.
 echo ""
-echo "[5/6] PlasmidFinder database..."
-if conda run -n plasmidos_env plasmidfinder.py --help 2>&1 | grep -q "database"; then
-    # PlasmidFinder downloads its DB automatically on first run
-    # We trigger it here so it's ready
-    TMP_FA=$(mktemp /tmp/test_XXXXXX.fasta)
-    echo ">test" > "$TMP_FA"
-    echo "ATCGATCGATCG" >> "$TMP_FA"
-    conda run -n plasmidos_env plasmidfinder.py \
-        -i "$TMP_FA" -o /tmp/pf_test 2>/dev/null || true
-    rm -f "$TMP_FA"
-    rm -rf /tmp/pf_test
-    echo "      PlasmidFinder database initialized."
-fi
-
-# ── 6. EggNOG-mapper (optional) ──────────────────────────────
-echo ""
-echo "[6/6] EggNOG-mapper database..."
-echo "      Opciones:"
-echo "        1) Completa  (~14 GB) — eggnog.db + eggnog_proteins.dmnd (recomendado)"
-echo "        2) Solo anotación (~6 GB) — solo eggnog.db, sin búsqueda diamond"
-echo "        3) Omitir             — EggNOG se saltea (sin anotación COG/GO)"
-echo ""
+echo "[5/5] EggNOG-mapper database..."
 EGGNOG_DB="$DB_DIR/eggnog_db"
-if already_exists "$EGGNOG_DB"; then
-    echo "      Ya existe en $EGGNOG_DB, saltando."
+# La versión de la base se toma del EggNOG-mapper instalado, así siempre
+# coincide con el programa aunque se instale la última versión.
+EGG_DB_VER=$(conda run -n eggnog_env python -c \
+    "from eggnogmapper.version import __DB_VERSION__; print(__DB_VERSION__)" 2>/dev/null | tr -d '[:space:]')
+if [[ -z "$EGG_DB_VER" ]]; then
+    EGG_DB_VER="5.0.2"
+    echo "      ⚠  Could not read the DB version from eggnog-mapper; using $EGG_DB_VER."
+fi
+EGG_URL="http://eggnog5.embl.de/download/emapperdb-${EGG_DB_VER}"
+EGG_MIN_GB=60          # espacio libre recomendado (descarga + descompresión)
+
+eggnog_db_ok() {
+    [[ -s "$1/eggnog.db" ]] && [[ -s "$1/eggnog.taxa.db" ]] && [[ -s "$1/eggnog_proteins.dmnd" ]]
+}
+
+# Baja un archivo .gz / .tar.gz y lo descomprime de forma segura:
+#  - wget -c retoma descargas cortadas
+#  - gzip -t verifica el archivo antes de descomprimir
+#  - se descomprime a un temporal y se renombra al final, así un corte
+#    a mitad de camino nunca deja un archivo final incompleto
+egg_get() {
+    local gz="$1" final="$2"
+    [[ -s "$final" ]] && return 0
+    echo "      → $gz"
+    wget -c -q --show-progress "$EGG_URL/$gz" || { echo "      ✖  Download failed: $gz"; return 1; }
+    if ! gzip -t "$gz" 2>/dev/null; then
+        echo "      ✖  $gz is corrupted; removed. Run the script again to re-download it."
+        rm -f "$gz"; return 1
+    fi
+    if [[ "$gz" == *.tar.gz ]]; then
+        rm -rf .extract_tmp && mkdir .extract_tmp
+        tar -zxf "$gz" -C .extract_tmp && mv .extract_tmp/* . && rm -rf .extract_tmp "$gz" \
+            || { rm -rf .extract_tmp; echo "      ✖  Could not extract $gz"; return 1; }
+    else
+        gunzip -c "$gz" > "$final.part" && mv "$final.part" "$final" && rm -f "$gz" \
+            || { rm -f "$final.part"; echo "      ✖  Could not decompress $gz (disk full?)"; return 1; }
+    fi
+}
+
+if eggnog_db_ok "$EGGNOG_DB"; then
+    echo "      Already exists and is complete at $EGGNOG_DB, skipping."
 else
-    read -p "      Opción [1/2/3]: " egg_opt
+    if [[ -e "$EGGNOG_DB" ]]; then
+        echo "      ⚠  Incomplete EggNOG DB at $EGGNOG_DB"
+        echo "         (missing eggnog.db, eggnog.taxa.db or eggnog_proteins.dmnd)."
+    fi
+    echo "      Opciones:"
+    echo "        1) Descargar/completar (necesita ~${EGG_MIN_GB} GB libres) — eggnog.db + taxa + diamond"
+    echo "        2) Omitir — EggNOG se saltea en el pipeline (sin anotación COG/GO)"
+    echo ""
+    read -p "      Opción [1/2]: " egg_opt
     if [[ "$egg_opt" == "1" ]]; then
         mkdir -p "$EGGNOG_DB"
-        conda run -n eggnog_env download_eggnog_data.py -y \
-            --data_dir "$EGGNOG_DB"
-        echo "      Done. Path: $EGGNOG_DB"
-    elif [[ "$egg_opt" == "2" ]]; then
-        mkdir -p "$EGGNOG_DB"
-        conda run -n eggnog_env download_eggnog_data.py -y \
-            --data_dir "$EGGNOG_DB" -D
-        echo "      Done. Path: $EGGNOG_DB"
+        libre_gb=$(df -BG --output=avail "$EGGNOG_DB" | tail -1 | tr -dc '0-9')
+        if [[ -n "$libre_gb" && "$libre_gb" -lt "$EGG_MIN_GB" ]]; then
+            echo "      ⚠  Only ${libre_gb} GB free in $(dirname "$EGGNOG_DB"); ~${EGG_MIN_GB} GB recommended."
+            read -p "         Continue anyway? [s/N]: " seguir
+            [[ "$seguir" =~ ^[sSyY]$ ]] || { echo "      Cancelled. Free some space and run the script again."; exit 1; }
+        fi
+        (
+            cd "$EGGNOG_DB"
+            find . -maxdepth 1 -name '*.gz' -size 0 -delete     # restos vacíos de intentos fallidos
+            ok=0
+            egg_get eggnog.taxa.tar.gz     eggnog.taxa.db       || ok=1
+            egg_get eggnog_proteins.dmnd.gz eggnog_proteins.dmnd || ok=1
+            egg_get eggnog.db.gz           eggnog.db            || ok=1
+            exit $ok
+        ) || true
+        if ! eggnog_db_ok "$EGGNOG_DB"; then
+            echo "      ✖  The EggNOG DB is still incomplete at $EGGNOG_DB."
+            echo "         Run this script again: partial downloads resume where they stopped."
+            exit 1
+        fi
+        echo "      Done. Path: $EGGNOG_DB  (eggNOG DB $EGG_DB_VER)"
+        echo "      Source: $EGG_URL (downloaded $(date +%Y-%m-%d))"
+        ram_gb=$(free -g | awk '/^(Mem|Memoria):/ {print $2}')
+        if [[ -n "$ram_gb" ]]; then
+            echo "      ℹ  Each EggNOG process needs ~4-5 GB of RAM. This machine has ${ram_gb} GB:"
+            echo "         use --cores $(( ram_gb / 5 > 0 ? ram_gb / 5 : 1 )) or fewer when running the pipeline."
+        fi
     else
         echo "      Omitido. EggNOG se saltea en el pipeline."
         EGGNOG_DB=""
