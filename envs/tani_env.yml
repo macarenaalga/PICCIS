@@ -1,7 +1,6 @@
 name: tani_env
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - r-base=4.5
   - r-mass
