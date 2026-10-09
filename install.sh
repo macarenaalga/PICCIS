@@ -1,6 +1,6 @@
 #!/bin/bash
 # ================================================================
-#  PICCIS v2.0 - Installation script
+#  PICCIS v1.0 - Installation script
 #  Run from the repository root:
 #    bash install.sh
 # ================================================================
@@ -31,7 +31,7 @@ else
     conda create -n plasmidos_env python=3.10 -y
     conda run -n plasmidos_env pip install -r "$SCRIPT_DIR/requirements.txt"
     mamba install -n plasmidos_env -c bioconda -c conda-forge \
-        "blast=2.12" plasmidfinder perl git -y
+        "blast=2.12" perl git -y
 fi
 echo "[1/11] Done."
 
@@ -66,7 +66,6 @@ check_env() {
 }
 
 check_env plasmidos_env  blastn
-check_env plasmidos_env  plasmidfinder.py
 check_env plasmidos_env  perl
 check_env plasmidos_env  git
 check_env spades_env     spades.py
@@ -80,6 +79,22 @@ check_env abricate_env   abricate
 check_env genomad_env    genomad
 check_env tani_env       Rscript
 check_env eggnog_env     emapper.py
+
+# PilerCR (usado por Bakta para CRISPR): el binario de bioconda puede estar
+# compilado con instrucciones de CPU que procesadores más viejos no tienen.
+# 'which' lo encuentra igual, así que hay que ejecutarlo para saber si sirve.
+# Un código >= 128 significa que el proceso murió por una señal
+# (132 = Illegal instruction, 139 = Segmentation fault).
+set +e
+conda run -n bakta_env pilercr -options &>/dev/null
+rc=$?
+set -e
+if [ "$rc" -ge 128 ]; then
+    echo "  [WARNING] pilercr in bakta_env crashes on this CPU (exit code $rc)."
+    echo "            Bakta will fail unless it runs with --skip-crispr."
+else
+    ok "pilercr" "bakta_env"
+fi
 
 # ── Instalar paquetes R para tani_env ────────────────────────
 echo ""
