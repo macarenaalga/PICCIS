@@ -28,9 +28,11 @@ echo "[1/11] Creating plasmidos_env (Python 3.10)..."
 if conda env list | grep -qE "^plasmidos_env[[:space:]]"; then
     echo "       Already exists, skipping."
 else
-    conda create -n plasmidos_env python=3.10 -y
+    # Mismos canales que los envs/*.yml: conda-forge primero, bioconda después,
+    # sin 'defaults' (mezclarlo con conda-forge genera conflictos de versiones).
+    conda create -n plasmidos_env -c conda-forge --override-channels python=3.10 -y
     conda run -n plasmidos_env pip install -r "$SCRIPT_DIR/requirements.txt"
-    mamba install -n plasmidos_env -c bioconda -c conda-forge \
+    mamba install -n plasmidos_env -c conda-forge -c bioconda --override-channels \
         "blast=2.12" perl git -y
 fi
 echo "[1/11] Done."
