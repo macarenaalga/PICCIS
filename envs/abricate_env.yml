@@ -2,6 +2,5 @@ name: abricate_env
 channels:
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
   - abricate
