@@ -2,7 +2,6 @@ name: bakta_env
 channels:
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
   - python=3.11
-  - bakta
+  - bakta>=1.11,<2
