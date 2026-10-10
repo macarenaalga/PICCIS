@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo ""
 echo "========================================================"
-echo "  PICCIS v2.0 - Environment setup"
+echo "  PICCIS v1.0 - Environment setup"
 echo "========================================================"
 echo ""
 
@@ -96,6 +96,47 @@ if [ "$rc" -ge 128 ]; then
     echo "            Bakta will fail unless it runs with --skip-crispr."
 else
     ok "pilercr" "bakta_env"
+fi
+
+# MMseqs2 (usado por geNomad): el binario de bioconda está compilado con AVX2.
+# En procesadores sin AVX2 se cae con "Illegal instruction" y geNomad falla en
+# todas las muestras. Si pasa, se reemplaza por la compilación oficial para
+# SSE4.1 de la MISMA versión (la original queda como mmseqs.avx2_original).
+set +e
+conda run -n genomad_env mmseqs version &>/dev/null
+rc=$?
+set -e
+if [ "$rc" -ge 128 ]; then
+    echo "  [WARNING] mmseqs in genomad_env crashes on this CPU (exit code $rc)."
+    if grep -qw sse4_1 /proc/cpuinfo; then
+        GENV=$(conda env list | awk '$1=="genomad_env" {print $NF}')
+        MMBIN="$GENV/bin/mmseqs"
+        MMVER=$(conda list -n genomad_env '^mmseqs2$' | awk '$1=="mmseqs2" {print $2}')
+        MMTAG="${MMVER/./-}"                      # 18.8cc5c → 18-8cc5c (etiqueta de GitHub)
+        TMPMM=$(mktemp -d)
+        echo "            Installing the SSE4.1 build of MMseqs2 ${MMVER:-latest}..."
+        set +e
+        wget -q -O "$TMPMM/mm.tar.gz" \
+            "https://github.com/soedinglab/MMseqs2/releases/download/${MMTAG}/mmseqs-linux-sse41.tar.gz" \
+          || wget -q -O "$TMPMM/mm.tar.gz" "https://mmseqs.com/latest/mmseqs-linux-sse41.tar.gz"
+        tar -xzf "$TMPMM/mm.tar.gz" -C "$TMPMM" \
+          && [ -f "$TMPMM/mmseqs/bin/mmseqs" ] \
+          && { [ -f "$MMBIN.avx2_original" ] || cp "$MMBIN" "$MMBIN.avx2_original"; } \
+          && cp "$TMPMM/mmseqs/bin/mmseqs" "$MMBIN"
+        conda run -n genomad_env mmseqs version &>/dev/null
+        rc=$?
+        set -e
+        rm -rf "$TMPMM"
+        if [ "$rc" -eq 0 ]; then
+            ok "mmseqs (SSE4.1 build)" "genomad_env"
+        else
+            echo "  [MISSING] mmseqs still fails; geNomad will not work on this computer."
+        fi
+    else
+        echo "            This CPU has neither AVX2 nor SSE4.1: geNomad cannot run here."
+    fi
+else
+    ok "mmseqs" "genomad_env"
 fi
 
 # ── Instalar paquetes R para tani_env ────────────────────────
