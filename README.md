@@ -8,8 +8,7 @@ PICCIS is a reproducible pipeline for the **identification, deduplication, annot
 <h1>
   <img src="logo_PICCIS.png" width="200" style="vertical-align: middle;"/>
 </h1>
-
----
+<a href="PICCIS_visualresume.pdf" target="_blank">Click here for a quick graphic presentation of PICCIS PDF</a>
 
 ## Table of Contents
 
