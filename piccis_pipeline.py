@@ -695,24 +695,39 @@ def _mob_recon_single(args: tuple):
 #correr platon
 def _platon_single(args: tuple):
     fasta, platon_db, sample_out, mode, threads_per_job = args
-    # Verificar longitud mínima (Platon necesita ≥1000 bp para predecir ORFs)
+    # Platon predice ORFs con pyrodigal, que necesita >= 20 000 bp para
+    # entrenarse. Con menos falla con "ORF prediction failed!". Esas muestras
+    # se marcan como NO evaluables (no como negativas) para el PICCIS score.
     try:
         total_len = sum(len(r.seq) for r in SeqIO.parse(fasta, "fasta"))
-        if total_len < 1000:
-            print(f"   [Platon] {fasta.name} too short ({total_len} bp) — skipping.")
+        if total_len < PLATON_MIN_BP:
+            print(f"   [Platon] {fasta.name} too short for Platon "
+                  f"({total_len} bp < {PLATON_MIN_BP}) — not evaluable, skipping.")
+            (Path(sample_out) / PLATON_NO_EVAL).write_text(
+                f"{fasta.name}\t{total_len} bp < {PLATON_MIN_BP} bp\n")
             return
     except Exception:
         pass
-    try:
-        conda_run("platon_env", [
-            "platon", "--db", platon_db,
-            "--output", sample_out,
-            "--mode", mode,
-            "--threads", str(threads_per_job),
-            fasta,
-        ], fatal=False)
-    except RuntimeError as e:
-        print(f"   ⚠  Platon failed for {fasta.name} — skipping. ({e})")
+    cmd = ["conda", "run", "--no-capture-output", "-n", "platon_env",
+           "platon", "--db", str(platon_db),
+           "--output", str(sample_out),
+           "--mode", mode,
+           "--threads", str(threads_per_job),
+           "--verbose",
+           str(fasta)]
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n[{ts}] ▶ {' '.join(cmd)}")
+    log_path = Path(sample_out) / "platon.log"
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True)
+    log_path.write_text(r.stdout or "")
+    if r.returncode != 0:
+        ultimas = "\n      ".join((r.stdout or "").strip().splitlines()[-10:])
+        print(f"   ⚠  Platon failed for {fasta.name} (exit {r.returncode}) — skipping.\n"
+              f"      Log completo: {log_path}\n      {ultimas}")
+
+PLATON_MIN_BP  = 20000
+PLATON_NO_EVAL = "PLATON_NO_EVALUABLE.txt"
 
 #correr platon en paralelo si ya existe saltea el proceso
 def run_platon(fasta_dir: Path, home: Path, platon_db: Path,
@@ -739,7 +754,8 @@ def run_platon(fasta_dir: Path, home: Path, platon_db: Path,
             sample_name = fasta.stem
         sample_out = mkdir(platon_out / sample_name)
         # Checkpoint: platon genera <sample>.plasmid.fasta al terminar
-        done = list(sample_out.glob("*.plasmid.fasta"))
+        done = (list(sample_out.glob("*.plasmid.fasta"))
+                or (sample_out / PLATON_NO_EVAL).exists())
         if done:
             print(f"   [Platon] {sample_name} already processed, skipping.")
             continue
@@ -828,8 +844,21 @@ def _extraer_sample(fasta: Path) -> str:
     return stem
 
 
+def _fasta_tiene_secuencia(path: Path) -> bool:
+    """True si el FASTA tiene al menos un nucleótido (no solo encabezados o líneas vacías).
+    Platon deja un .plasmid.fasta vacío cuando no detecta plásmidos."""
+    try:
+        with open(path) as fh:
+            for linea in fh:
+                if not linea.startswith(">") and linea.strip():
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _safe_name(name: str) -> str:
-   
+
     import re
     # Reemplazar puntos por guiones (excepto la extensión .fasta)
     name = re.sub(r'\.(?!fasta$|fa$|fna$|gbk$|gff3?$)', '-', name)
@@ -994,7 +1023,7 @@ def run_genomad(fasta: Path, out_dir: Path, genomad_db: Path,
     name       = sample_name or fasta.stem
     sample_out = mkdir(out_dir / name)
     # Checkpoint
-    if list(sample_out.glob("*_plasmid_summary.tsv")):
+    if list(sample_out.rglob("*_plasmid_summary.tsv")):
         print(f"   [geNomad] {name} already processed, skipping.")
         return sample_out
     try:
@@ -1131,13 +1160,62 @@ def _abricate_single(args: tuple):
     fu, db, outfile = args
     fastas = sorted([f for f in fu.iterdir()
                      if f.is_file() and f.suffix in (".fasta", ".fa", ".fna")])
+    vacios = [f for f in fastas if not _fasta_tiene_secuencia(f)]
+    for f in vacios:
+        print(f"   ⚠  Abricate [{db}]: empty file skipped → {f.name}")
+    fastas = [f for f in fastas if f not in vacios]
     if not fastas:
         return
-    import subprocess
-    cmd = ["conda", "run", "--no-capture-output", "-n", "abricate_env",
-           "abricate", "--db", db] + [str(f) for f in fastas]
-    with open(outfile, "w") as fh:
-        subprocess.run(cmd, stdout=fh, check=True)
+
+    base = ["conda", "run", "--no-capture-output", "-n", "abricate_env",
+            "abricate", "--db", db]
+
+    def _errores(stderr: str) -> list:
+        return [l.strip() for l in stderr.splitlines()
+                if "ERROR" in l or "rror:" in l]
+
+    # 1) Intento rápido: todos los FASTA en una sola llamada
+    r = subprocess.run(base + [str(f) for f in fastas],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        outfile.write_text(r.stdout)
+        return
+
+    errs = _errores(r.stderr)
+    # Si el problema es la base de datos, fallarían todos los archivos: cortar con un mensaje claro
+    if any("database" in e.lower() or "setupdb" in e.lower() for e in errs):
+        raise RuntimeError(
+            f"Abricate: database '{db}' not available in abricate_env.\n"
+            + "\n".join(errs[-5:]) +
+            "\nFix:  conda run -n abricate_env abricate --setupdb\n"
+            "      conda run -n abricate_env abricate --list")
+
+    print(f"   ⚠  Abricate [{db}] failed on the joint run (exit {r.returncode}):")
+    for e in (errs or r.stderr.strip().splitlines())[-5:]:
+        print(f"        {e}")
+    print(f"   ↻  Retrying file by file to skip the problematic ones...")
+
+    # 2) Reintento archivo por archivo, acumulando la salida con un único encabezado
+    header, filas, fallidos = None, [], []
+    for f in fastas:
+        r1 = subprocess.run(base + [str(f)], capture_output=True, text=True)
+        if r1.returncode != 0:
+            e1 = _errores(r1.stderr) or r1.stderr.strip().splitlines()[-1:]
+            fallidos.append((f.name, e1[-1] if e1 else f"exit {r1.returncode}"))
+            continue
+        lineas = r1.stdout.splitlines()
+        if lineas:
+            header = header or lineas[0]
+            filas.extend(lineas[1:])
+
+    if header:
+        outfile.write_text("\n".join([header] + filas) + "\n")
+    if fallidos:
+        print(f"   ⚠  Abricate [{db}]: {len(fallidos)} file(s) skipped:")
+        for nombre, motivo in fallidos:
+            print(f"        {nombre}: {motivo}")
+    if len(fallidos) == len(fastas):
+        raise RuntimeError(f"Abricate [{db}] failed on every file; see the errors above.")
 
 
 def run_abricate(fu: Path, home: Path, n_workers: int = 1):
@@ -1182,7 +1260,7 @@ def _bakta_single(args: tuple):
     conda_run("bakta_env",
               ["bakta", "--db", bakta_db,
                "--output", sample_out,
-               "--prefix", fasta.stem,
+               "--prefix", fasta.stem, "--skip-crispr",
                "--force",
                fasta])
 
@@ -1199,13 +1277,22 @@ def run_bakta(fu: Path, home: Path, bakta_db: Path,
     hash_actual = hashlib.md5(ids_actual.encode()).hexdigest()[:8]
     hash_file   = bakta_out / ".input_hash"
 
-    # Si el hash cambió, borrar bakta_out y empezar de nuevo
-    if hash_file.exists():
-        hash_previo = hash_file.read_text().strip()
-        if hash_previo != hash_actual:
-            print(f"   [Bakta] input FASTAs changed → re-annotating everything")
-            shutil.rmtree(bakta_out)
-            bakta_out.mkdir(parents=True, exist_ok=True)
+    # Si cambió el conjunto de plásmidos: anotación incremental. Cada plásmido
+    # se anota por separado, así que solo se borran las carpetas de plásmidos
+    # que ya no están en fastas-unicos/; los ya anotados se reutilizan
+    # (checkpoint por plásmido en _bakta_single) y solo se anotan los nuevos.
+    if hash_file.exists() and hash_file.read_text().strip() != hash_actual:
+        vigentes  = {f.stem for f in fastas}
+        obsoletas = [d for d in bakta_out.iterdir()
+                     if d.is_dir() and d.name not in vigentes]
+        for d in obsoletas:
+            shutil.rmtree(d)
+        pendientes = [f for f in fastas
+                      if not (list((bakta_out / f.stem).glob("*.gff3"))
+                              if (bakta_out / f.stem).is_dir() else [])]
+        print(f"   [Bakta] input FASTAs changed → {len(obsoletas)} stale annotation(s) "
+              f"removed, {len(pendientes)} plasmid(s) to annotate, "
+              f"{len(fastas) - len(pendientes)} reused")
 
     # Guardar hash actual
     hash_file.write_text(hash_actual)
@@ -1277,7 +1364,8 @@ def _sanitizar_gff3(gff_path: Path, fasta_path: Path = None) -> Path:
     if genes_removidos == 0:
         return gff_path  # sin cambios, usar original
 
-    tmp = Path(tempfile.mktemp(suffix=".gff3", prefix="piccis_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="piccis_"))
+    tmp = tmp_dir / gff_path.name
     tmp.write_text("".join(lines_out))
     print(f"   [Panaroo] {gff_path.parent.name}: {genes_removidos} gene(s) with internal stop removed")
     return tmp
@@ -1354,7 +1442,20 @@ def _eggnog_single(args: tuple):
         cmd += ["--data_dir", eggnog_db]
     else:
         cmd += ["--server-mode"]
-    conda_run("eggnog_env", cmd)
+    full = ["conda", "run", "--no-capture-output", "-n", "eggnog_env"] + \
+           [str(c) for c in cmd]
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n[{ts}] ▶ {' '.join(full)}")
+    log_path = Path(f"{outp}.emapper.log")
+    r = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True)
+    log_path.write_text(r.stdout or "")
+    if r.returncode != 0:
+        # No detener el pipeline por un plásmido: avisar y seguir.
+        # Sin .emapper.annotations, se reintenta en la próxima corrida.
+        ultimas = "\n      ".join((r.stdout or "").strip().splitlines()[-12:])
+        print(f"   ⚠  EggNOG failed for {Path(faa).stem} (exit {r.returncode}) — skipping.\n"
+              f"      Log completo: {log_path}\n      {ultimas}")
 
 
 def run_eggnog(bakta_out: Path, home: Path, n_workers: int = 1,
@@ -1609,7 +1710,7 @@ def _load_genomad(home: Path) -> pd.DataFrame:
     for sample_dir in sorted(genomad_out.iterdir()):
         if not sample_dir.is_dir():
             continue
-        for summary in sample_dir.glob("*_plasmid_summary.tsv"):
+        for summary in sample_dir.rglob("*_plasmid_summary.tsv"):
             try:
                 df = pd.read_csv(summary, sep="\t")
                 if "seq_name" not in df.columns:
@@ -1622,6 +1723,20 @@ def _load_genomad(home: Path) -> pd.DataFrame:
                     })
             except Exception:
                 pass
+    # Si el score confirmó plásmidos por BLAST, usar esos IDs (los nombres de
+    # geNomad son los del contig y no cruzan directamente con la tabla)
+    conf = home / "genomad_confirmados.tsv"
+    if rows and conf.exists():
+        por_seq = {_safe_name(r["ID"]): r for r in rows}
+        mapeadas = []
+        for linea in conf.read_text().splitlines()[1:]:
+            if "\t" not in linea:
+                continue
+            fid, gstem = linea.split("\t", 1)
+            seq = gstem.split("__genomad__", 1)[-1]
+            if seq in por_seq:
+                mapeadas.append({**por_seq[seq], "ID": fid})
+        return pd.DataFrame(mapeadas) if mapeadas else pd.DataFrame()
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
@@ -1738,8 +1853,26 @@ def build_unified_table(home: Path, fu: Path, add_meta: bool = False,
 
     # Metadatos opcionales ingresados por el usuario
     if metadata_file and Path(metadata_file).exists():
-        sep_meta = "," if str(metadata_file).endswith(".csv") else "\t"
-        df_meta = pd.read_csv(metadata_file, sep=sep_meta)
+        # Detectar separador por el encabezado (Excel en español guarda los .csv con ';')
+        with open(metadata_file, "rb") as _fh:
+            _header = _fh.readline().decode("latin-1")
+        _conteo = {s: _header.count(s) for s in ("\t", ";", ",")}
+        sep_meta = max(_conteo, key=_conteo.get)
+        if _conteo[sep_meta] == 0:
+            sep_meta = "," if str(metadata_file).endswith(".csv") else "\t"
+        if sep_meta != ("," if str(metadata_file).endswith(".csv") else "\t"):
+            print(f"   ℹ  Metadata separator detected: {repr(sep_meta)}")
+        # Excel/LibreOffice suelen guardar en Latin-1 (ñ, acentos): probar varias codificaciones
+        df_meta = None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                df_meta = pd.read_csv(metadata_file, sep=sep_meta, encoding=enc)
+                if enc != "utf-8-sig":
+                    print(f"   ℹ  Metadata read with encoding {enc}")
+                break
+            except UnicodeDecodeError:
+                continue
+        df_meta.columns = [str(c).strip() for c in df_meta.columns]
         # Normalizar nombre de columna de sample
         for col in ["sample", "Sample", "SAMPLE", "cepa", "strain"]:
             if col in df_meta.columns:
@@ -1841,6 +1974,45 @@ def build_unified_table(home: Path, fu: Path, add_meta: bool = False,
 #  MÓDULO 5 – PICCIS SCORE
 # ═══════════════════════════════════════════════════════════════════
 
+def _confirmar_genomad_por_blast(home: Path, fu: Path, ids: list,
+                                 pident_thr: float = 95.0,
+                                 cov_thr: float = 95.0) -> dict:
+    """Plásmidos únicos que coinciden con un plásmido de geNomad de su muestra.
+
+    Usa el mismo criterio que la deduplicación (_blast_par). Devuelve
+    {ID del plásmido único: nombre del FASTA de geNomad} y lo guarda en
+    genomad_confirmados.tsv para la tabla unificada.
+    """
+    import re as _re
+    todos_plas = home / "todos_plasmidos"
+    resultado: dict = {}
+    gfiles = sorted(todos_plas.glob("*__genomad__*.fasta")) if todos_plas.exists() else []
+    if gfiles:
+        def _muestra(nombre: str) -> str:
+            m = _re.sub(r"_contig_\d+$", "", nombre.split("__")[0])
+            return m.replace("-", "_")
+        por_muestra: dict = {}
+        for g in gfiles:
+            por_muestra.setdefault(_muestra(g.name), []).append(g)
+        bdir = mkdir(home / "genomad_blast")
+        for fid in ids:
+            if "__genomad__" in fid or "__" not in fid:
+                continue
+            q = fu / f"{fid}.fasta"
+            if not q.exists():
+                continue
+            for g in por_muestra.get(_muestra(fid), []):
+                ok, _, _ = _blast_par(q, g, bdir, pident_thr, cov_thr)
+                if ok:
+                    resultado[fid] = g.stem
+                    break
+        print(f"   [geNomad] {len(resultado)}/{len(ids)} plasmids confirmed by "
+              f"geNomad (BLAST ≥{pident_thr:.0f}% id, ≥{cov_thr:.0f}% cov)")
+    (home / "genomad_confirmados.tsv").write_text(
+        "ID\tgenomad_fasta\n" + "".join(f"{k}\t{v}\n" for k, v in resultado.items()))
+    return resultado
+
+
 def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
 
     ids_unicos_raw = [
@@ -1866,9 +2038,9 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
                     s_genomad = "__genomad__" in s
                     # Si matcheó con algo que no es genomad → confirmado
                     if q_genomad and not s_genomad:
-                        genomad_con_match.add(q)
+                        genomad_con_match.add(_norm_id(q))
                     if s_genomad and not q_genomad:
-                        genomad_con_match.add(s)
+                        genomad_con_match.add(_norm_id(s))
                     # Si dos genomad matchean entre sí no cuenta como confirmación
         except Exception as e:
             print(f"   ⚠  Error reading summarized BLAST: {e}")
@@ -1876,7 +2048,8 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
     # Filtro si genomad no matcheó con ningún otro programa
     ids_unicos = []
     for fid in ids_unicos_raw:
-        if "__genomad__" in fid and fid not in genomad_con_match:
+        if ("__genomad__" in fid and genomad_con_match
+                and _norm_id(fid) not in genomad_con_match):
             continue  # genomad sin confirmación → excluir
         ids_unicos.append(fid)
 
@@ -1924,17 +2097,15 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
     ids = ids_unicos + cepas_sin_plasmidos
 
     # Leer BLAST resumido para transferir detectores 
-    blast_aliases: dict[str, set] = {fid: {fid} for fid in ids}
+    blast_aliases: dict[str, set] = {_norm_id(fid): {fid} for fid in ids}
     blast_tsv = home / "resultados-blast-resumido.tsv"
     if blast_tsv.exists():
         try:
             df_blast = pd.read_csv(blast_tsv, sep="\t")
 
             def _registrar_alias(winner: str, descartado: str):
-                for w in {winner, winner.replace("-", "_"), winner.replace("_", "-")}:
-                    if w not in blast_aliases:
-                        blast_aliases[w] = {w}
-                    blast_aliases[w].add(descartado)
+                w = _norm_id(winner)
+                blast_aliases.setdefault(w, {winner}).add(descartado)
 
             for _, row in df_blast.iterrows():
                 q = Path(str(row.get("query", ""))).stem
@@ -1950,11 +2121,14 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
         except Exception:
             pass
 
+    _norm_cache: dict = {}
     def _match_any(candidatos: list, mapa: dict) -> int:
-        for c in candidatos:
-            if mapa.get(c, 0):
-                return 1
-        return 0
+        # Compara con nombres normalizados (-, . y _ equivalentes)
+        claves = _norm_cache.get(id(mapa))
+        if claves is None or claves[0] != len(mapa):
+            claves = (len(mapa), {_norm_id(k) for k, v in mapa.items() if v})
+            _norm_cache[id(mapa)] = claves
+        return int(any(_norm_id(c) in claves[1] for c in candidatos))
 
     def _candidatos(fid: str) -> list:
 
@@ -1985,7 +2159,7 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
             expandidos.append(c.replace("_", "-"))
 
         # Agregar alias a la secuencia
-        for alias in blast_aliases.get(fid, set()):
+        for alias in blast_aliases.get(_norm_id(fid), set()):
             if alias != fid:
                 expandidos += _candidatos_simple(alias)
 
@@ -2051,7 +2225,7 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
         for sample_dir in genomad_out.iterdir():
             if not sample_dir.is_dir():
                 continue
-            for summary in sample_dir.glob("*_plasmid_summary.tsv"):
+            for summary in sample_dir.rglob("*_plasmid_summary.tsv"):
                 try:
                     df_g = pd.read_csv(summary, sep="\t")
                     if "seq_name" in df_g.columns:
@@ -2065,6 +2239,9 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
     if todos_plas.exists():
         for f in todos_plas.glob("*_genomad_*.fasta"):
             genomad_map[f.stem] = 1
+    # Confirmación por secuencia contra los plásmidos de geNomad de la muestra
+    for fid in _confirmar_genomad_por_blast(home, fu, ids_unicos):
+        genomad_map[fid] = 1
 
 #Platon
     platon_map: dict[str, int] = {}
@@ -2097,8 +2274,36 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
     # También desde todos_plasmidos/
     if todos_plas.exists():
         for f in todos_plas.glob("*_platon*.fasta"):
+            if not _fasta_tiene_secuencia(f):
+                continue
             platon_map[f.stem] = 1
             platon_map[_safe_name(f.stem)] = 1
+
+    # Platon NO evaluable (secuencias < PLATON_MIN_BP): se excluye del
+    # denominador del score en vez de contarse como 0.
+    import re as _re_ne
+    platon_ne_map: dict[str, int] = {}
+    _po = home / "platon_out"
+    if _po.exists():
+        por_fuente: dict[str, list] = {}
+        for sample_dir in _po.iterdir():
+            if not sample_dir.is_dir():
+                continue
+            fuente = _re_ne.sub(r'_contig_\d+$', '', sample_dir.name)
+            ne = (sample_dir / PLATON_NO_EVAL).exists()
+            por_fuente.setdefault(fuente, []).append(ne)
+            if ne:
+                platon_ne_map[sample_dir.name] = 1
+                platon_ne_map[_safe_name(sample_dir.name)] = 1
+        # La accesión completa solo es "no evaluable" si TODOS sus contigs lo son
+        for fuente, flags in por_fuente.items():
+            if flags and all(flags):
+                platon_ne_map[fuente] = 1
+                platon_ne_map[_safe_name(fuente)] = 1
+        n_ne = sum(sum(f) for f in por_fuente.values())
+        if n_ne:
+            print(f"   [Score] {n_ne} Platon sample(s) < {PLATON_MIN_BP} bp: "
+                  f"det_platon = NaN (excluded from the score denominator).")
 
 #PlasmidFinder
     pf_finder_map: dict[str, int] = {}
@@ -2197,6 +2402,11 @@ def calcular_piccis_score(home: Path, fu: Path) -> pd.DataFrame:
             mapa = DETECTORES_FASTQ[col_name]
             if col_name not in DETECTORES:
                 # No aplica para este origen → NaN
+                row[col_name] = float("nan")
+            elif (col_name == "det_platon"
+                  and not _match_any(candidatos, mapa)
+                  and _match_any(candidatos, platon_ne_map)):
+                # Platon no pudo evaluarlo (secuencia corta) → NaN, no 0
                 row[col_name] = float("nan")
             elif mapa:
                 val = _match_any(candidatos, mapa)
@@ -2568,17 +2778,103 @@ def grafico_planisferio(df: pd.DataFrame, shp_path: Path, gdir: Path):
     df["species"] = (df["Especie"].fillna("Unknown")
                      if "Especie" in df.columns else "Unknown")
 
-    geolocator = Nominatim(user_agent="piccis_geo")
+    # Coordenadas aproximadas (centro geográfico) de países frecuentes:
+    # el mapa no depende de internet para ellos. Nominatim solo se consulta
+    # para países que no estén acá, con pausa entre consultas, y si el
+    # servicio falla (p. ej. HTTP 429: Too many requests) el país se saltea
+    # sin cortar el pipeline.
+    COORDS_PAISES = {
+        "United States": (39.8, -98.6), "Canada": (56.1, -106.3),
+        "Mexico": (23.6, -102.6), "Brazil": (-14.2, -51.9),
+        "Argentina": (-38.4, -63.6), "Chile": (-35.7, -71.5),
+        "Colombia": (4.6, -74.3), "Peru": (-9.2, -75.0),
+        "Uruguay": (-32.5, -55.8), "United Kingdom": (55.4, -3.4),
+        "Ireland": (53.4, -8.2), "Spain": (40.5, -3.7),
+        "Portugal": (39.4, -8.2), "France": (46.2, 2.2),
+        "Germany": (51.2, 10.5), "Italy": (41.9, 12.6),
+        "Netherlands": (52.1, 5.3), "Belgium": (50.5, 4.5),
+        "Switzerland": (46.8, 8.2), "Austria": (47.5, 14.6),
+        "Czech Republic": (49.8, 15.5), "Poland": (51.9, 19.1),
+        "Sweden": (60.1, 18.6), "Norway": (60.5, 8.5),
+        "Denmark": (56.3, 9.5), "Finland": (61.9, 25.7),
+        "Greece": (39.1, 21.8), "Turkey": (39.0, 35.2),
+        "Russia": (61.5, 105.3), "Kazakhstan": (48.0, 66.9),
+        "China": (35.9, 104.2), "Japan": (36.2, 138.3),
+        "South Korea": (35.9, 127.8), "Taiwan": (23.7, 121.0),
+        "India": (20.6, 79.0), "Pakistan": (30.4, 69.3),
+        "Thailand": (15.9, 101.0), "Vietnam": (14.1, 108.3),
+        "Malaysia": (4.2, 102.0), "Indonesia": (-0.8, 113.9),
+        "Philippines": (12.9, 121.8), "Australia": (-25.3, 133.8),
+        "New Zealand": (-40.9, 174.9), "South Africa": (-30.6, 22.9),
+        "Nigeria": (9.1, 8.7), "Egypt": (26.8, 30.8),
+        "Kenya": (0.0, 37.9), "Iran": (32.4, 53.7),
+        "Israel": (31.0, 34.9), "Saudi Arabia": (23.9, 45.1),
+    }
+    ALIAS_PAISES = {
+        "usa": "United States", "us": "United States",
+        "united states of america": "United States",
+        "uk": "United Kingdom", "england": "United Kingdom",
+        "great britain": "United Kingdom", "viet nam": "Vietnam",
+        "korea": "South Korea", "republic of korea": "South Korea",
+        "czechia": "Czech Republic", "brasil": "Brazil",
+        "españa": "Spain", "alemania": "Germany", "japón": "Japan",
+        "estados unidos": "United States", "reino unido": "United Kingdom",
+    }
+    _por_minuscula = {k.lower(): k for k in COORDS_PAISES}
+
+    # Caché de consultas a Nominatim (solo países fuera de la tabla)
+    cache_path = gdir.parent / "geocache.tsv"
+    cache = {}
+    if cache_path.exists():
+        try:
+            for linea in cache_path.read_text().splitlines()[1:]:
+                nom, lat, lon = linea.split("\t")
+                cache[nom] = (float(lat), float(lon))
+        except Exception:
+            cache = {}
+
+    geocode = None
     coords_pais = {}
     for country in df[col_pais].dropna().unique():
+        nombre = str(country).strip()
+        if not nombre:
+            continue
+        clave = ALIAS_PAISES.get(nombre.lower(), nombre)
+        clave = _por_minuscula.get(clave.lower(), clave)
+        if clave in COORDS_PAISES:
+            coords_pais[country] = COORDS_PAISES[clave]
+            continue
+        if nombre in cache:
+            coords_pais[country] = cache[nombre]
+            continue
+        if geocode is None:
+            import logging
+            from geopy.extra.rate_limiter import RateLimiter
+            logging.getLogger("geopy").setLevel(logging.ERROR)   # sin trazas por cada reintento
+            geolocator = Nominatim(
+                user_agent="PICCIS-pipeline/2.0 (plasmid analysis; github.com/macarenaalga/PICCIS)")
+            geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1,
+                                  max_retries=2, error_wait_seconds=10.0,
+                                  swallow_exceptions=False)
         try:
-            loc = geolocator.geocode(str(country), timeout=15)
-            if loc:
-                coords_pais[country] = (loc.latitude, loc.longitude)
-            else:
-                print(f"   ⚠  Country not found: {country}")
-        except GeocoderTimedOut:
-            print(f"   ⚠  Timeout: {country}")
+            loc = geocode(nombre, timeout=15)
+        except Exception as e:
+            print(f"   ⚠  Could not geolocate '{nombre}' ({type(e).__name__}); "
+                  f"skipped on the map.")
+            continue
+        if loc:
+            coords_pais[country] = (loc.latitude, loc.longitude)
+            cache[nombre] = coords_pais[country]
+        else:
+            print(f"   ⚠  Country not found: {nombre}")
+
+    if cache:
+        try:
+            cache_path.write_text("country\tlat\tlon\n" + "".join(
+                f"{k}\t{v[0]}\t{v[1]}\n" for k, v in cache.items()))
+        except Exception:
+            pass
+
     if not coords_pais:
         print("⚠  G9 skipped: no geolocated countries.");  return
 
@@ -2663,6 +2959,44 @@ def grafico_cog(home: Path, df_meta: pd.DataFrame, gdir: Path):
     if not df_meta.empty and "ID" in df_meta.columns:
         cols = ["ID"] + [c for c in ["Especie","Niche"] if c in df_meta.columns]
         df_egg = df_egg.merge(df_meta[cols], on="ID", how="left")
+
+    # Tablas con los mismos números que los gráficos de COG
+    try:
+        tdir = mkdir(home / "tablas_resumen")
+        col_desc = next((c for c in df_egg.columns if c.lower() == "description"), None)
+        col_name = next((c for c in df_egg.columns if c.lower() == "preferred_name"), None)
+        col_q    = next((c for c in df_egg.columns if c.lower() == "query"), None)
+        cols_ann = ["ID"] + [c for c in [col_q, cog_col, "COG_cat_simple",
+                                         col_name, col_desc, "Especie", "Niche"]
+                             if c and c in df_egg.columns]
+        (df_egg[cols_ann]
+           .rename(columns={col_q or "": "gen", cog_col: "COG_completa",
+                            "COG_cat_simple": "COG_usada_en_graficos",
+                            col_name or "": "nombre_preferido",
+                            col_desc or "": "descripcion"})
+           .to_csv(tdir / "COG_anotaciones.tsv", sep="\t", index=False))
+
+        tot = df_egg["COG_cat_simple"].value_counts().sort_index().rename("n_genes")
+        (tot.to_frame()
+            .assign(porcentaje=lambda d: (d["n_genes"] / d["n_genes"].sum() * 100).round(2))
+            .rename_axis("COG")
+            .to_csv(tdir / "COG_conteo_total.tsv", sep="\t"))
+
+        (df_egg.groupby(["ID", "COG_cat_simple"]).size().unstack(fill_value=0)
+            .to_csv(tdir / "COG_por_plasmido.tsv", sep="\t"))
+
+        for col_g, nombre in [("Especie", "COG_por_especie"), ("Niche", "COG_por_niche")]:
+            if col_g in df_egg.columns and df_egg[col_g].notna().any():
+                t = (df_egg.dropna(subset=[col_g])
+                           .groupby([col_g, "COG_cat_simple"]).size()
+                           .rename("n_genes").reset_index())
+                t["porcentaje"] = (t["n_genes"] /
+                                   t.groupby(col_g)["n_genes"].transform("sum") * 100).round(2)
+                t.rename(columns={"COG_cat_simple": "COG"}).to_csv(
+                    tdir / f"{nombre}.tsv", sep="\t", index=False)
+        print(f"   💾  COG tables → {tdir}")
+    except Exception as e:
+        print(f"   ⚠  Could not save COG tables: {e}")
 
     cats  = sorted(df_egg["COG_cat_simple"].unique())
     cmap  = plt.get_cmap("tab20")
@@ -2779,6 +3113,34 @@ def grafico_svd_kmeans(home: Path, gdir: Path):
                     df_meta[col].reindex(df_bin.index), errors="coerce"
                 ).fillna(0)
 
+    # Colapsar familias génicas con patrón de presencia/ausencia idéntico.
+    # Genes que viajan juntos (operones, T4SS, casetes, módulos adquiridos en
+    # un solo evento) generan columnas idénticas: sin colapsar, un mismo módulo
+    # pesaría en el SVD tantas veces como familias tenga. Se deja una columna
+    # por patrón y el mapeo módulo → familias → plásmidos va a
+    # modulos_genicos.tsv para interpretar las cargas.
+    X_bin = df_bin.to_numpy()
+    _, idx_rep, inv = np.unique(X_bin, axis=1, return_index=True, return_inverse=True)
+    inv = np.asarray(inv).ravel()               # forma estable en NumPy 1.x y 2.x
+    n_familias_orig = df_bin.shape[1]
+    columnas_mod, filas_mod = {}, []
+    for k, r in enumerate(np.argsort(idx_rep), 1):   # en orden de aparición
+        miembros  = [str(c) for c in df_bin.columns[inv == r]]
+        etiqueta  = miembros[0] if len(miembros) == 1 else f"modulo_{k:04d}"
+        presentes = [str(p) for p in df_bin.index[X_bin[:, idx_rep[r]] == 1]]
+        columnas_mod[etiqueta] = X_bin[:, idx_rep[r]]
+        filas_mod.append({"modulo": etiqueta,
+                          "n_familias": len(miembros),
+                          "n_plasmidos": len(presentes),
+                          "familias": ";".join(miembros),
+                          "plasmidos": ";".join(presentes)})
+    df_bin = pd.DataFrame(columnas_mod, index=df_bin.index)
+    (pd.DataFrame(filas_mod)
+       .sort_values(["n_familias", "n_plasmidos"], ascending=False)
+       .to_csv(home / "modulos_genicos.tsv", sep="\t", index=False))
+    print(f"   [SVD] {n_familias_orig} gene families → {df_bin.shape[1]} unique "
+          f"presence/absence patterns (modules) → modulos_genicos.tsv")
+
     # Combinar Panaroo + variables extra
     if not df_extra.empty:
         df_extra = df_extra.fillna(0)
@@ -2813,10 +3175,10 @@ def grafico_svd_kmeans(home: Path, gdir: Path):
     reducida  = reducida[:, :codo_var]
     print(f"   Components selected by elbow: {codo_var}")
 
-    k_range = range(2, min(11, len(df_combined)))
+    k_range = range(2, min(16, len(df_combined)))
     inertias, silhouettes = [], []
     for k in k_range:
-        km = KMeans(n_clusters=k, random_state=42, n_init="auto")
+        km = KMeans(n_clusters=k, random_state=42, n_init=100)
         cl = km.fit_predict(reducida)
         inertias.append(km.inertia_)
         silhouettes.append(silhouette_score(reducida, cl))
@@ -2833,10 +3195,10 @@ def grafico_svd_kmeans(home: Path, gdir: Path):
     k_elbow = _encontrar_codo(inertias) + 2
     print(f"\n   1 – Silhouette (k={k_sil})   2 – Elbow (k={k_elbow})   3 – Manual")
     op      = ask("   Option [1/2/3]: ", ["1","2","3"])
-    mejor_k = {"1":k_sil, "2":k_elbow,
-                "3":int(input("   k value: ").strip())}[op]
+    mejor_k = (k_sil if op == "1" else k_elbow if op == "2"
+               else int(input("   k value: ").strip()))
 
-    km_fin  = KMeans(n_clusters=mejor_k, random_state=42, n_init="auto")
+    km_fin  = KMeans(n_clusters=mejor_k, random_state=42, n_init=100)
     cl_fin  = km_fin.fit_predict(reducida)
     cnames  = [f"Comp_{i+1}" for i in range(reducida.shape[1])]
     df_comp = pd.DataFrame(reducida, index=df_combined.index, columns=cnames)
@@ -2881,6 +3243,14 @@ def grafico_svd_kmeans(home: Path, gdir: Path):
 
 
 #Árbol tANI + Heatmap Panaroo 
+
+def _norm_id(s) -> str:
+    """Normaliza IDs para cruzar árbol tANI, Panaroo y tablas."""
+    import re
+    s = str(s).strip().strip("'\"")
+    s = re.sub(r'\.(fasta|fa|fna|fas|gff3?|gbk)$', '', s, flags=re.I)
+    return re.sub(r'[.\-\s]', '_', s)
+                             
 def grafico_arbol_heatmap(home: Path, df_meta: pd.DataFrame,
                            df_clusters, gdir: Path):
 
@@ -2912,20 +3282,36 @@ def grafico_arbol_heatmap(home: Path, df_meta: pd.DataFrame,
         sample_cols = [c for c in df_pan.columns if c not in PANAROO_METADATA_COLS]
         df_pa = df_pan[sample_cols].notna().astype(int).T
 
-    df_pa.index = df_pa.index.str.replace(r"\.", "_", regex=True)
-    filtered = [s for s in tree_ids if s in df_pa.index]
-    df_pa    = df_pa.loc[filtered]
+    df_pa.index = [_norm_id(i) for i in df_pa.index]
+    df_pa = df_pa[~df_pa.index.duplicated(keep="first")]
+    tree_norm = [_norm_id(t) for t in tree_ids]
+
+    comunes = [s for s in tree_norm if s in df_pa.index]
+    if not comunes:
+        print("⚠  Tree+Heatmap skipped: tree tips don't match Panaroo samples.")
+        print("   Tree tips (5):", tree_ids[:5])
+        print("   Panaroo   (5):", list(df_pa.index[:5]))
+        return
+    faltan = [t for t in tree_norm if t not in df_pa.index]
+    if faltan:
+        print(f"   ⚠  {len(faltan)} tree tip(s) without Panaroo data "
+              f"(empty row in heatmap): {faltan[:5]}")
+
+    # Una fila por hoja, en el mismo orden que el árbol, para que queden alineados
+    df_pa = df_pa.reindex(tree_norm).fillna(0).astype(int)
+    df_pa = df_pa.loc[:, df_pa.sum(axis=0) > 0]
 
     # Mapas de Niche y Cluster
     niche_map, cluster_map = {}, {}
     if not df_meta.empty and "ID" in df_meta.columns:
         df_m = df_meta.copy()
-        df_m["clean"] = df_m["ID"].str.replace(r"\.", "_", regex=True)
+        df_m["clean"] = df_m["ID"].map(_norm_id)
         if "Niche" in df_m.columns:
             niche_map = dict(zip(df_m["clean"], df_m["Niche"]))
     if df_clusters is not None and not df_clusters.empty:
-        idx = df_clusters.index.astype(str).str.replace(r"\.", "_", regex=True)
+        idx = [_norm_id(i) for i in df_clusters.index]
         cluster_map = dict(zip(idx, df_clusters["Cluster"].astype(str)))
+        
 
     # Colorear primeras bifurcaciones del árbol
     BRANCH_COLORS = ["#006400","#228B22","#32CD32","#3CB371","#6B8E23",
@@ -2953,9 +3339,11 @@ def grafico_arbol_heatmap(home: Path, df_meta: pd.DataFrame,
         sp.set_visible(False)
 
     xlim  = ax0.get_xlim()
-    leaf_y = {t.name: y
-               for y, t in enumerate(reversed(tree.get_terminals()))
-               if t.name in niche_map or t.name in cluster_map}
+    leaf_y = {}
+    for y, t in enumerate(tree.get_terminals(), start=1):
+        k = _norm_id(t.name)
+        if k in niche_map or k in cluster_map:
+            leaf_y[k] = y
     x_niche   = xlim[1] + 1
     x_cluster = x_niche + 1.2
 
@@ -3308,6 +3696,8 @@ Core selection priority:
             if not sample_dir.is_dir():
                 continue
             for pf in sample_dir.glob("*.plasmid.fasta"):
+                if not _fasta_tiene_secuencia(pf):
+                    continue        # Platon no detectó plásmidos en esta muestra
                 stem = f"{_safe_name(sample_dir.name)}__platon__{_safe_name(sample_dir.name)}-platon-plasmid"
                 dest = todos_plasmidos / f"{stem}.fasta"
                 if not dest.exists():
@@ -3386,6 +3776,8 @@ Core selection priority:
             if not sample_dir.is_dir():
                 continue
             for pf in sample_dir.glob("*.plasmid.fasta"):
+                if not _fasta_tiene_secuencia(pf):
+                    continue        # Platon no detectó plásmidos en este contig
                 # sample_dir.name = LMG23361_contig_6
                 # Extraer fuente: quitar _contig_N
                 fuente = _re.sub(r'_contig_\d+$', '', sample_dir.name)
@@ -3429,25 +3821,45 @@ Core selection priority:
                         continue
                     q = Path(parts[1]).stem
                     s = Path(parts[2]).stem
+                    # Normalizado: el TSV puede tener "CP000443-1__..." y
+                    # fastas-unicos/ "CP000443_1__..." (renombrado posterior)
                     if "__genomad__" in q and "__genomad__" not in s:
-                        genomad_confirmado.add(q)
+                        genomad_confirmado.add(_norm_id(q))
                     if "__genomad__" in s and "__genomad__" not in q:
-                        genomad_confirmado.add(s)
+                        genomad_confirmado.add(_norm_id(s))
         except Exception as e:
             print(f"   ⚠  Error reading summarized BLAST: {e}")
+
+    # Sin tabla BLAST no hay con qué confirmar: no filtrar nada
+    filtrar_genomad = blast_tsv_path.exists() and bool(genomad_confirmado)
+    if not filtrar_genomad:
+        print("   ⚠  [genomad filter] resultados-blast-resumido.tsv missing or with no "
+              "geNomad matches — filter NOT applied (nothing removed).")
+    cuarentena = home / "descartados_genomad_only"
 
     plasmidos_analizados = mkdir(home / "plasmidos_analizados")
     n_backup = 0
     n_genomad_filtrado = 0
+    vacios_eliminados = []
     nombres_actuales = set()
     for f in sorted(unique_dir.glob("*.fasta")):
         if "__" not in f.stem:
             continue
-        # Filtrar genomad-only (no confirmado por otro programa)
-        if "__genomad__" in f.stem and f.stem not in genomad_confirmado:
-            n_genomad_filtrado += 1
-            # eliminar de fastas-unicos/
+        # Filtrar FASTA sin secuencia (p. ej. Platon sin plásmidos detectados)
+        if not _fasta_tiene_secuencia(f):
+            vacios_eliminados.append(f.name)
             f.unlink(missing_ok=True)
+            orig = todos_plasmidos / f.name
+            if orig.exists() and not _fasta_tiene_secuencia(orig):
+                orig.unlink()
+            continue
+        # Filtrar genomad-only (no confirmado por otro programa)
+        if (filtrar_genomad and "__genomad__" in f.stem
+                and _norm_id(f.stem) not in genomad_confirmado):
+            n_genomad_filtrado += 1
+            # mover (no borrar) a descartados_genomad_only/ — recuperable
+            mkdir(cuarentena)
+            shutil.move(str(f), str(cuarentena / f.name))
             continue
         nombres_actuales.add(f.name)
         dest_bk = plasmidos_analizados / f.name
@@ -3466,8 +3878,13 @@ Core selection priority:
         print(f"   [sync] {n_obsoletos} stale backup(s) removed from "
               f"plasmidos_analizados/ (no longer present in fastas-unicos/)")
 
+    if vacios_eliminados:
+        print(f"   [filter] {len(vacios_eliminados)} empty FASTA(s) removed (no sequence):")
+        for n in vacios_eliminados:
+            print(f"        {n}")
     if n_genomad_filtrado:
-        print(f"   [filter] {n_genomad_filtrado} genomad-only plasmids removed")
+        print(f"   [filter] {n_genomad_filtrado} genomad-only plasmids moved to "
+              f"{cuarentena.name}/ (recoverable)")
     if n_backup:
         print(f"✔  Backup → plasmidos_analizados/ ({n_backup} FASTAs)")
 
@@ -3506,12 +3923,31 @@ Core selection priority:
         mask_genomad     = df_score.get("det_genomad", pd.Series(0)) == 1
         mask_others_zero = df_score[det_cols].fillna(0).eq(0).all(axis=1)
         genomad_only_ids = set(df_score.loc[mask_genomad & mask_others_zero, "ID"])
+        # Solo se filtran plásmidos que vienen de ensamblados propios (FASTQ).
+        # Las entradas GBK/FASTA ya son plásmidos depositados: que solo geNomad
+        # los detecte suele deberse a que son cortos (< 20 kb, Platon no los
+        # evalúa) o no tienen replicón/relaxasa tipificable por MOB-suite,
+        # no a que sean falsos positivos.
+        _uni = home / "FASTQ-unicycler"
+        _fastq_samples = set()
+        if _uni.exists():
+            for _d in _uni.iterdir():
+                if _d.is_dir():
+                    _fastq_samples |= {_d.name, _d.name.replace("-", "_"),
+                                       _d.name.replace("_", "-")}
+        _gbk_conservados = {f for f in genomad_only_ids
+                            if f.split("__")[0] not in _fastq_samples}
+        genomad_only_ids -= _gbk_conservados
+        if _gbk_conservados:
+            print(f"   [genomad-only filter] {len(_gbk_conservados)} geNomad-only "
+                  f"sequence(s) from GBK/FASTA input kept (filter applies to FASTQ only)")
         if genomad_only_ids:
             for fid in genomad_only_ids:
                 for carpeta in [unique_dir, plasmidos_analizados]:
                     f = carpeta / f"{fid}.fasta"
                     if f.exists():
-                        f.unlink()
+                        dest = mkdir(home / "descartados_genomad_only" / carpeta.name)
+                        shutil.move(str(f), str(dest / f.name))
             print(f"   [genomad-only filter] {len(genomad_only_ids)} sequences removed")
 
             score_path.unlink(missing_ok=True)
